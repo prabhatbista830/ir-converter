@@ -31,7 +31,7 @@ page = st.sidebar.radio("Navigation Menu", ["🏠 Home", "📝 IR Converter", "�
 if page == "🏠 Home":
     st.title("📊 CMM Quality Suite")
     st.write("Welcome! Use the sidebar to switch between tools.")
-    st.info("The IR Converter uses your verified logic. The Discrepancy Report handles multi-file batching with positive integer output.")
+    st.info("The IR Converter uses your verified logic. The Discrepancy Report handles multi-file batching with absolute decimal output.")
 
 # --- PAGE 2: IR CONVERTER (STABLE VERSION) ---
 elif page == "📝 IR Converter":
@@ -86,10 +86,10 @@ elif page == "📝 IR Converter":
                         st.download_button("📥 Download Final IR", output.getvalue(), "Final_Report_Done.xlsx")
             except Exception as e: st.error(f"Error: {e}")
 
-# --- PAGE 3: DISCREPANCY REPORT (POSITIVE INTEGERS & BLANKS) ---
+# --- PAGE 3: DISCREPANCY REPORT (POSITIVE NUMBERS & BLANKS) ---
 elif page == "⚠️ Discrepancy Report":
     st.title("⚠️ Batch Out-of-Tolerance Reporter")
-    st.write("Upload multiple CMM files. Failures will show as positive integers; passes remain blank.")
+    st.write("Upload multiple CMM files. Failures show as positive numbers (preserving decimals); passes remain blank.")
     
     uploaded_files = st.file_uploader("Upload CMM Results", type=["xlsx"], accept_multiple_files=True, key="oot_batch")
 
@@ -120,14 +120,13 @@ elif page == "⚠️ Discrepancy Report":
                             u_tol, l_tol = float(row['UPPER TOL']), float(row['LOWER TOL'])
                             
                             if act > (nom + u_tol) or act < (nom + l_tol):
-                                # Tolerence text logic
                                 if l_tol == 0: t_str = f"+ {abs(u_tol)}"
                                 elif u_tol == 0: t_str = f"- {abs(l_tol)}"
                                 else: t_str = f"+/- {abs(u_tol)}"
                                 
                                 col_header = f"Dim#{name} ({nom} {t_str})"
-                                # Convert to positive integer (e.g. -37.5 -> 37)
-                                val_to_show = int(abs(act))
+                                # Strip negative sign but keep decimals
+                                val_to_show = abs(act)
                                 part_row[col_header] = val_to_show
                         except: continue
                     
@@ -135,7 +134,6 @@ elif page == "⚠️ Discrepancy Report":
 
                 if all_part_data:
                     final_oot_df = pd.DataFrame(all_part_data)
-                    # This ensures cells with no data are blank, not 0
                     final_oot_df = final_oot_df.fillna("")
                     
                     st.write("### Combined Failure Summary:")
