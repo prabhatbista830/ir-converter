@@ -4,7 +4,7 @@ from openpyxl import load_workbook
 import re
 import io
 
-# --- LOGIC FUNCTIONS (EXACTLY FROM YOUR WORKING IR CODE) ---
+# --- LOGIC FUNCTIONS (IR CONVERTER - UNCHANGED) ---
 def extract_base_number(text):
     if pd.isna(text): 
         return None
@@ -17,7 +17,6 @@ def format_val(val):
     except:
         return str(val)
 
-# Helper for Discrepancy coordinate filtering
 def is_coordinate_basic(char_name):
     name = str(char_name).strip().upper()
     return any(name.endswith(f".{c}") or name.endswith(f" {c}") or name == c for c in ['X', 'Y', 'Z'])
@@ -31,145 +30,124 @@ page = st.sidebar.radio("Navigation Menu", ["🏠 Home", "📝 IR Converter", "�
 # --- PAGE 1: HOME ---
 if page == "🏠 Home":
     st.title("📊 CMM Quality Suite")
-    st.write("Welcome! Use the sidebar to switch between the IR Automator and the Discrepancy Report.")
-    st.info("The IR Converter uses your verified logic for template population.")
+    st.write("Welcome! Use the sidebar to switch between tools.")
+    st.info("The IR Converter uses your verified logic. The Discrepancy Report now supports multi-file batching.")
 
-# --- PAGE 2: IR CONVERTER (YOUR EXACT CODE) ---
+# --- PAGE 2: IR CONVERTER (STABLE VERSION) ---
 elif page == "📝 IR Converter":
     st.title("📊 CMM Result to IR Automator")
-    st.write("Upload your CMM Excel export and your IR Template to automate the data entry.")
-
-    uploaded_cmm = st.file_uploader("Step 1: Upload CMM Result (Excel)", type=["xlsx"], key="ir_cmm_up")
-    uploaded_template = st.file_uploader("Step 2: Upload IR Template (Excel)", type=["xlsx"], key="ir_tmp_up")
+    uploaded_cmm = st.file_uploader("Upload CMM Result", type=["xlsx"], key="ir_cmm_up")
+    uploaded_template = st.file_uploader("Upload IR Template", type=["xlsx"], key="ir_tmp_up")
 
     if uploaded_cmm and uploaded_template:
         if st.button("🚀 Process and Generate Report"):
-            with st.spinner("Processing data..."):
-                try:
-                    # --- READ CMM DATA ---
-                    df_raw = pd.read_excel(uploaded_cmm, header=None, nrows=50)
-                    header_row_idx = next((i for i, row in df_raw.iterrows() if row.astype(str).str.contains("Characteristic", case=False).any()), None)
-                    
-                    if header_row_idx is None:
-                        st.error("Could not find 'Characteristic' column in CMM file.")
-                    else:
-                        df_cmm = pd.read_excel(uploaded_cmm, header=header_row_idx)
-                        df_cmm.columns = [str(c).strip().upper() for c in df_cmm.columns]
-                        
-                        cmm_results = {}
-                        for _, row in df_cmm.iterrows():
-                            raw_text = str(row.get("CHARACTERISTIC", "")).strip().upper()
-                            base_num = extract_base_number(raw_text)
-                            
-                            if not base_num: 
-                                continue
-                            
-                            is_coordinate = any(raw_text.endswith(f".{c}") or raw_text.endswith(f" {c}") or raw_text == c for c in ['X', 'Y', 'Z'])
-                            if is_coordinate: 
-                                continue
-
-                            try:
-                                val = float(row.get("ACTUAL", 0))
-                            except:
-                                continue
-
-                            if base_num not in cmm_results:
-                                cmm_results[base_num] = {'master': None, 'samples': []}
-
-                            if raw_text == base_num or raw_text == f"{base_num}.0":
-                                cmm_results[base_num]['master'] = val
-                            else:
-                                cmm_results[base_num]['samples'].append(val)
-
-                        # --- FILL TEMPLATE ---
-                        wb = load_workbook(uploaded_template)
-                        ws = wb.active
-                        id_col_idx, res_col_idx, start_row = None, None, None
-                        
-                        for r in range(1, 31):
-                            for c in range(1, ws.max_column + 1):
-                                cell_val = str(ws.cell(row=r, column=c).value)
-                                if "5. Char No." in cell_val: 
-                                    id_col_idx, start_row = c, r
-                                if "9. Results" in cell_val: 
-                                    res_col_idx = c
-
-                        if id_col_idx is None or res_col_idx is None:
-                            st.error("Could not find '5. Char No.' or '9. Results' in the Template.")
-                        else:
-                            for r in range(start_row + 1, ws.max_row + 1):
-                                raw_id_val = ws.cell(row=r, column=id_col_idx).value
-                                ir_id = extract_base_number(raw_id_val)
-                                
-                                if ir_id in cmm_results:
-                                    data = cmm_results[ir_id]
-                                    if data['master'] is not None:
-                                        final_output = format_val(data['master'])
-                                    elif data['samples']:
-                                        vals = data['samples']
-                                        if len(vals) > 1 and min(vals) != max(vals):
-                                            final_output = f"{format_val(min(vals))} - {format_val(max(vals))}"
-                                        else:
-                                            final_output = format_val(vals[0])
-                                    else: 
-                                        continue
-                                    ws.cell(row=r, column=res_col_idx).value = final_output
-
-                            output = io.BytesIO()
-                            wb.save(output)
-                            st.success("✅ Report Generated Successfully!")
-                            st.download_button(
-                                label="📥 Download Final IR Report",
-                                data=output.getvalue(),
-                                file_name="Final_Report_Done.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
-                except Exception as e:
-                    st.error(f"An unexpected error occurred: {e}")
-
-# --- PAGE 3: DISCREPANCY REPORT ---
-elif page == "⚠️ Discrepancy Report":
-    st.title("⚠️ Out-of-Tolerance Reporter")
-    uploaded_oot = st.file_uploader("Upload CMM Result", type=["xlsx"], key="oot_up")
-
-    if uploaded_oot:
-        if st.button("🔍 Generate Discrepancy Report"):
             try:
-                # SN from F8
-                df_sn = pd.read_excel(uploaded_oot, header=None, nrows=10, usecols="F")
-                sn_val = df_sn.iloc[7, 0]
-                
-                # Data Load
-                df_raw_oot = pd.read_excel(uploaded_oot, header=None, nrows=50)
-                h_idx = next((i for i, row in df_raw_oot.iterrows() if row.astype(str).str.contains("Characteristic", case=False).any()), 12)
-                df_data = pd.read_excel(uploaded_oot, header=h_idx)
-                df_data.columns = [str(c).strip().upper() for c in df_data.columns]
+                df_raw = pd.read_excel(uploaded_cmm, header=None, nrows=50)
+                header_row_idx = next((i for i, row in df_raw.iterrows() if row.astype(str).str.contains("Characteristic", case=False).any()), None)
+                if header_row_idx is None:
+                    st.error("Could not find 'Characteristic' column.")
+                else:
+                    df_cmm = pd.read_excel(uploaded_cmm, header=header_row_idx)
+                    df_cmm.columns = [str(c).strip().upper() for c in df_cmm.columns]
+                    cmm_results = {}
+                    for _, row in df_cmm.iterrows():
+                        raw_text = str(row.get("CHARACTERISTIC", "")).strip().upper()
+                        base_num = extract_base_number(raw_text)
+                        if not base_num or is_coordinate_basic(raw_text): continue
+                        try: val = float(row.get("ACTUAL", 0))
+                        except: continue
+                        if base_num not in cmm_results: cmm_results[base_num] = {'master': None, 'samples': []}
+                        if raw_text == base_num or raw_text == f"{base_num}.0": cmm_results[base_num]['master'] = val
+                        else: cmm_results[base_num]['samples'].append(val)
+                    
+                    wb = load_workbook(uploaded_template)
+                    ws = wb.active
+                    id_col_idx, res_col_idx, start_row = None, None, None
+                    for r in range(1, 31):
+                        for c in range(1, ws.max_column + 1):
+                            cell_val = str(ws.cell(row=r, column=c).value)
+                            if "5. Char No." in cell_val: id_col_idx, start_row = c, r
+                            if "9. Results" in cell_val: res_col_idx = c
+                    
+                    if id_col_idx and res_col_idx:
+                        for r in range(start_row + 1, ws.max_row + 1):
+                            ir_id = extract_base_number(ws.cell(row=r, column=id_col_idx).value)
+                            if ir_id in cmm_results:
+                                data = cmm_results[ir_id]
+                                if data['master'] is not None: final_output = format_val(data['master'])
+                                elif data['samples']:
+                                    vals = data['samples']
+                                    final_output = f"{format_val(min(vals))} - {format_val(max(vals))}" if len(vals) > 1 and min(vals) != max(vals) else format_val(vals[0])
+                                else: continue
+                                ws.cell(row=r, column=res_col_idx).value = final_output
+                        output = io.BytesIO()
+                        wb.save(output)
+                        st.success("✅ IR Report Generated!")
+                        st.download_button("📥 Download Final IR", output.getvalue(), "Final_Report_Done.xlsx")
+            except Exception as e: st.error(f"Error: {e}")
 
-                oot_results = {"SN": [sn_val]}
-                for _, row in df_data.iterrows():
-                    name = str(row.get("CHARACTERISTIC", "")).strip()
-                    if is_coordinate_basic(name) or name.lower() == "nan" or name == "":
-                        continue
-                    try:
-                        act, nom = float(row['ACTUAL']), float(row['NOMINAL'])
-                        u_tol, l_tol = float(row['UPPER TOL']), float(row['LOWER TOL'])
-                        if act > (nom + u_tol) or act < (nom + l_tol):
-                            # Header logic
-                            if l_tol == 0: t_str = f"+ {abs(u_tol)}"
-                            elif u_tol == 0: t_str = f"- {abs(l_tol)}"
-                            else: t_str = f"+/- {abs(u_tol)}"
+# --- PAGE 3: DISCREPANCY REPORT (MULTI-FILE & ABSOLUTE INTEGERS) ---
+elif page == "⚠️ Discrepancy Report":
+    st.title("⚠️ Batch Out-of-Tolerance Reporter")
+    st.write("Upload multiple CMM files to get a combined failure report.")
+    
+    uploaded_files = st.file_uploader("Upload CMM Results (Select multiple files)", type=["xlsx"], accept_multiple_files=True, key="oot_batch")
+
+    if uploaded_files:
+        if st.button("🔍 Generate Combined Discrepancy Report"):
+            all_part_data = [] # List to hold dictionaries for each SN
+            
+            try:
+                for uploaded_file in uploaded_files:
+                    # 1. SN from F8
+                    df_sn = pd.read_excel(uploaded_file, header=None, nrows=10, usecols="F")
+                    sn_val = df_sn.iloc[7, 0]
+                    
+                    # 2. Data Load
+                    df_raw_oot = pd.read_excel(uploaded_file, header=None, nrows=50)
+                    h_idx = next((i for i, row in df_raw_oot.iterrows() if row.astype(str).str.contains("Characteristic", case=False).any()), 12)
+                    df_data = pd.read_excel(uploaded_file, header=h_idx)
+                    df_data.columns = [str(c).strip().upper() for c in df_data.columns]
+
+                    part_row = {"SN": sn_val}
+                    found_failure = False
+
+                    for _, row in df_data.iterrows():
+                        name = str(row.get("CHARACTERISTIC", "")).strip()
+                        if is_coordinate_basic(name) or name.lower() == "nan" or name == "": continue
+                        
+                        try:
+                            act, nom = float(row['ACTUAL']), float(row['NOMINAL'])
+                            u_tol, l_tol = float(row['UPPER TOL']), float(row['LOWER TOL'])
                             
-                            oot_results[f"Dim#{name} ({nom} {t_str})"] = [f"{act:.4f}"]
-                    except: continue
+                            # Math check
+                            if act > (nom + u_tol) or act < (nom + l_tol):
+                                if l_tol == 0: t_str = f"+ {abs(u_tol)}"
+                                elif u_tol == 0: t_str = f"- {abs(l_tol)}"
+                                else: t_str = f"+/- {abs(u_tol)}"
+                                
+                                col_header = f"Dim#{name} ({nom} {t_str})"
+                                # Convert to absolute integer as requested (e.g., -37.001 -> 37)
+                                part_row[col_header] = int(abs(round(act)))
+                                found_failure = True
+                        except: continue
+                    
+                    all_part_data.append(part_row)
 
-                if len(oot_results) > 1:
-                    oot_df = pd.DataFrame(oot_results)
-                    st.dataframe(oot_df)
+                if all_part_data:
+                    # Merge all dictionaries into one DataFrame (Pandas handles blanks automatically)
+                    final_oot_df = pd.DataFrame(all_part_data)
+                    # Fill NaN with empty string so "Pass" cells are blank
+                    final_oot_df = final_oot_df.fillna("")
+                    
+                    st.write("### Combined Failure Summary:")
+                    st.dataframe(final_oot_df)
+                    
                     out_oot = io.BytesIO()
                     with pd.ExcelWriter(out_oot, engine='xlsxwriter') as writer:
-                        oot_df.to_excel(writer, index=False)
-                    st.download_button("📥 Download Discrepancy Excel", out_oot.getvalue(), "Discrepancy_Report.xlsx")
+                        final_oot_df.to_excel(writer, index=False)
+                    st.download_button("📥 Download Combined Discrepancies", out_oot.getvalue(), "Combined_Discrepancy_Report.xlsx")
                 else:
-                    st.success("✅ No discrepancies found!")
+                    st.success("✅ No discrepancies found across any parts!")
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error processing files: {e}")
