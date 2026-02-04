@@ -1,66 +1,138 @@
 import streamlit as st
 import pandas as pd
+from openpyxl import load_workbook
+import re
 import io
 
-st.set_page_config(page_title="OOT Checker Test", layout="wide")
+# --- UNIVERSAL SETTINGS ---
+st.set_page_config(page_title="CMM Quality Suite", layout="wide")
 
-st.title("⚠️ Discrepancy Feature Test")
-st.write("Checking SN from **F8** and matching **Actual** vs **Nominal**.")
+# --- HELPER FUNCTIONS ---
+def extract_base_number(text):
+    if pd.isna(text): return None
+    match = re.search(r'(\d+)', str(text))
+    return match.group(1) if match else None
 
-uploaded_cmm = st.file_uploader("Upload CMM Result (Excel)", type=["xlsx"])
+def is_coordinate(char_name):
+    name = str(char_name).strip().upper()
+    suffixes = ('.X', '.Y', '.Z', '.A', '.B', '.C', ' X', ' Y', ' Z')
+    standalones = ['X', 'Y', 'Z', 'A', 'B', 'C']
+    return name.endswith(suffixes) or name in standalones
 
-if uploaded_cmm:
-    try:
-        # 1. TEST SN EXTRACTION FROM F8
-        # We read just cell F8 (Row index 7, Column F is index 5)
-        df_sn = pd.read_excel(uploaded_cmm, header=None, nrows=10, usecols="F")
-        sn_value = df_sn.iloc[7, 0] 
-        
-        st.info(f"📍 **Detected SN (from Cell F8):** {sn_value}")
+# --- NAVIGATION ---
+page = st.sidebar.radio("Navigation Menu", ["🏠 Home", "📝 IR Converter", "⚠️ Discrepancy Feature"])
 
-        # 2. FIND THE DATA HEADER
-        # We look for the row containing "Characteristic"
-        df_scan = pd.read_excel(uploaded_cmm, header=None, nrows=25)
-        header_idx = next((i for i, row in df_scan.iterrows() if "CHARACTERISTIC" in row.astype(str).str.upper().values), 12)
-        
-        # Load the actual data
-        df = pd.read_excel(uploaded_cmm, header=header_idx)
-        df.columns = [str(c).strip().upper() for c in df.columns]
+# --- PAGE 1: HOME ---
+if page == "🏠 Home":
+    st.title("🏠 CMM Quality Suite")
+    st.write("Welcome! This tool handles your quality reporting automation.")
+    st.info("""
+    **Available Tools:**
+    * **IR Converter:** Fills your standard IR Template with CMM results.
+    * **Discrepancy Feature:** Generates a summary of all dimensions that failed tolerance.
+    """)
 
-        # 3. RUN THE MATH
-        oot_results = {"SN": [sn_value]}
-        
-        # We look for these exact column names in your Excel
-        for _, row in df.iterrows():
+# --- PAGE 2: IR CONVERTER ---
+elif page == "📝 IR Converter":
+    st.title("📝 IR Template Automator")
+    st.write("Upload your files to populate the standard Inspection Report.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        uploaded_cmm = st.file_uploader("Upload CMM Result (Excel)", type=["xlsx"], key="ir_cmm")
+    with col2:
+        uploaded_template = st.file_uploader("Upload IR Template (Excel)", type=["xlsx"], key="ir_tmp")
+
+    if uploaded_cmm and uploaded_template:
+        if st.button("🚀 Process IR Report"):
             try:
-                char_name = str(row.get("CHARACTERISTIC", ""))
-                actual = float(row.get("ACTUAL", 0))
-                nominal = float(row.get("NOMINAL", 0))
-                u_tol = float(row.get("UPPER TOL", 0))
-                l_tol = float(row.get("LOWER TOL", 0))
+                # Load CMM Data
+                df_scan = pd.read_excel(uploaded_cmm, header=None, nrows=25)
+                header_idx = next((i for i, row in df_scan.iterrows() if "CHARACTERISTIC" in row.astype(str).str.upper().values), 12)
+                df_cmm = pd.read_excel(uploaded_cmm, header=header_idx)
+                df_cmm.columns = [str(c).strip().upper() for c in df_cmm.columns]
 
-                # Logic: Check if outside the boundaries
-                if actual > (nominal + u_tol) or actual < (nominal + l_tol):
-                    header_text = f"Dim#{char_name} ({nominal} +/- {abs(u_tol)})"
-                    oot_results[header_text] = [actual]
-            except:
-                continue # Skip rows that aren't numbers (like text or empty rows)
+                # Filter Coordinates
+                df_cmm['BASE_CHAR'] = df_cmm['CHARACTERISTIC'].apply(lambda x: None if is_coordinate(x) else extract_base_number(x))
+                cmm_clean = df_cmm.dropna(subset=['BASE_CHAR']).copy()
+                cmm_final = cmm_clean.groupby('BASE_CHAR')['ACTUAL'].agg(['min', 'max']).reset_index()
 
-        # 4. SHOW RESULTS
-        if len(oot_results) > 1:
-            st.success("🔥 Discrepancies Found!")
-            final_df = pd.DataFrame(oot_results)
-            st.dataframe(final_df)
+                # Write to Template
+                template_bytes = uploaded_template.getvalue()
+                book = load_workbook(io.BytesIO(template_bytes))
+                sheet = book.active
 
-            # Excel Download
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                final_df.to_excel(writer, index=False)
-            output.seek(0)
-            
-            st.download_button("📥 Download OOT Excel", output, "OOT_Report.xlsx")
-        else:
-            st.warning("No OOT values found based on the math.")
+                count = 0
+                for row_idx in range(1, sheet.max_row + 1):
+                    cell_value = sheet.cell(row=row_idx, column=1).value
+                    base_num = extract_base_number(cell_value)
+                    
+                    if base_num:
+                        match = cmm_final[cmm_final['BASE_CHAR'] == base_num]
+                        if not match.empty:
+                            val_min = match.iloc[0]['min']
+                            val_max = match.iloc[0]['max']
+                            output_str = f"{val_min:.4f} / {val_max:.4f}" if val_min != val_max else f"{val_min:.4f}"
+                            sheet.cell(row=row_idx, column=3).value = output_str
+                            count += 1
 
-    except Exception as e:
-        st.error(f"Something went wrong: {e}")
+                # Download
+                out_ir = io.BytesIO()
+                book.save(out_ir)
+                st.success(f"✅ Matched {count} characteristics!")
+                st.download_button("📥 Download Filled IR", out_ir.getvalue(), "Filled_IR_Report.xlsx")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# --- PAGE 3: DISCREPANCY FEATURE ---
+elif page == "⚠️ Discrepancy Feature":
+    st.title("⚠️ Out-of-Tolerance Reporter")
+    st.write("This tool creates a horizontal report of failing dimensions only.")
+    
+    uploaded_oot = st.file_uploader("Upload CMM Result", type=["xlsx"], key="oot_cmm")
+
+    if uploaded_oot:
+        if st.button("🔍 Generate Discrepancy Report"):
+            try:
+                # 1. SN from F8
+                df_sn = pd.read_excel(uploaded_oot, header=None, nrows=10, usecols="F")
+                sn_val = df_sn.iloc[7, 0]
+                
+                # 2. Process Data
+                df_scan = pd.read_excel(uploaded_oot, header=None, nrows=25)
+                h_idx = next((i for i, row in df_scan.iterrows() if "CHARACTERISTIC" in row.astype(str).str.upper().values), 12)
+                df_data = pd.read_excel(uploaded_oot, header=h_idx)
+                df_data.columns = [str(c).strip().upper() for c in df_data.columns]
+
+                oot_results = {"SN": [sn_val]}
+                
+                for _, row in df_data.iterrows():
+                    char_name = str(row.get("CHARACTERISTIC", ""))
+                    if is_coordinate(char_name) or char_name == "nan":
+                        continue
+                    
+                    try:
+                        act = float(row.get("ACTUAL", 0))
+                        nom = float(row.get("NOMINAL", 0))
+                        u_tol = float(row.get("UPPER TOL", 0))
+                        l_tol = float(row.get("LOWER TOL", 0))
+
+                        if act > (nom + u_tol) or act < (nom + l_tol):
+                            col_header = f"Dim#{char_name} ({nom} +/- {abs(u_tol)})"
+                            oot_results[col_header] = [f"{act:.4f}"]
+                    except:
+                        continue
+
+                if len(oot_results) > 1:
+                    oot_df = pd.DataFrame(oot_results)
+                    st.write("### Failure Summary:")
+                    st.dataframe(oot_df)
+
+                    out_oot = io.BytesIO()
+                    with pd.ExcelWriter(out_oot, engine='xlsxwriter') as writer:
+                        oot_df.to_excel(writer, index=False)
+                    st.download_button("📥 Download Discrepancy Excel", out_oot.getvalue(), "Discrepancy_Report.xlsx")
+                else:
+                    st.success("✅ No discrepancies found (excluding coordinates)!")
+            except Exception as e:
+                st.error(f"Error: {e}")
