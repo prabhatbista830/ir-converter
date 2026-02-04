@@ -1,101 +1,66 @@
 import streamlit as st
 import pandas as pd
-from openpyxl import load_workbook
-import re
 import io
 
-# --- LOGIC FUNCTIONS ---
-def extract_base_number(text):
-    if pd.isna(text): return None
-    match = re.search(r'(\d+)', str(text))
-    return match.group(1) if match else None
+st.set_page_config(page_title="OOT Checker Test", layout="wide")
 
-def format_val(val):
+st.title("⚠️ Discrepancy Feature Test")
+st.write("Checking SN from **F8** and matching **Actual** vs **Nominal**.")
+
+uploaded_cmm = st.file_uploader("Upload CMM Result (Excel)", type=["xlsx"])
+
+if uploaded_cmm:
     try:
-        return f"{float(val):.4f}"
-    except:
-        return str(val)
+        # 1. TEST SN EXTRACTION FROM F8
+        # We read just cell F8 (Row index 7, Column F is index 5)
+        df_sn = pd.read_excel(uploaded_cmm, header=None, nrows=10, usecols="F")
+        sn_value = df_sn.iloc[7, 0] 
+        
+        st.info(f"📍 **Detected SN (from Cell F8):** {sn_value}")
 
-# --- THE WEBSITE INTERFACE ---
-st.set_page_config(page_title="CMM to IR Converter", page_icon="📊")
+        # 2. FIND THE DATA HEADER
+        # We look for the row containing "Characteristic"
+        df_scan = pd.read_excel(uploaded_cmm, header=None, nrows=25)
+        header_idx = next((i for i, row in df_scan.iterrows() if "CHARACTERISTIC" in row.astype(str).str.upper().values), 12)
+        
+        # Load the actual data
+        df = pd.read_excel(uploaded_cmm, header=header_idx)
+        df.columns = [str(c).strip().upper() for c in df.columns]
 
-st.title("📊 CMM Result to IR Automator")
-st.write("Hello! The app is officially running. Upload your files below.")
-
-# 1. FILE UPLOADERS
-uploaded_cmm = st.file_uploader("Step 1: Upload CMM Result (Excel)", type=["xlsx"])
-uploaded_template = st.file_uploader("Step 2: Upload IR Template (Excel)", type=["xlsx"])
-
-if uploaded_cmm and uploaded_template:
-    if st.button("🚀 Process and Generate Report"):
-        with st.spinner("Processing data..."):
+        # 3. RUN THE MATH
+        oot_results = {"SN": [sn_value]}
+        
+        # We look for these exact column names in your Excel
+        for _, row in df.iterrows():
             try:
-                # --- READ CMM DATA ---
-                df_raw = pd.read_excel(uploaded_cmm, header=None, nrows=50)
-                header_row_idx = next((i for i, row in df_raw.iterrows() if row.astype(str).str.contains("Characteristic", case=False).any()), None)
-                
-                if header_row_idx is None:
-                    st.error("Could not find 'Characteristic' column in CMM file.")
-                else:
-                    df_cmm = pd.read_excel(uploaded_cmm, header=header_row_idx)
-                    df_cmm.columns = [str(c).strip().upper() for c in df_cmm.columns]
-                    
-                    cmm_results = {}
-                    for _, row in df_cmm.iterrows():
-                        raw_text = str(row.get("CHARACTERISTIC", "")).strip().upper()
-                        base_num = extract_base_number(raw_text)
-                        if not base_num: continue
-                        
-                        is_coordinate = any(raw_text.endswith(f".{c}") or raw_text.endswith(f" {c}") or raw_text == c for c in ['X', 'Y', 'Z'])
-                        if is_coordinate: continue
+                char_name = str(row.get("CHARACTERISTIC", ""))
+                actual = float(row.get("ACTUAL", 0))
+                nominal = float(row.get("NOMINAL", 0))
+                u_tol = float(row.get("UPPER TOL", 0))
+                l_tol = float(row.get("LOWER TOL", 0))
 
-                        try:
-                            val = float(row.get("ACTUAL", 0))
-                        except:
-                            continue
+                # Logic: Check if outside the boundaries
+                if actual > (nominal + u_tol) or actual < (nominal + l_tol):
+                    header_text = f"Dim#{char_name} ({nominal} +/- {abs(u_tol)})"
+                    oot_results[header_text] = [actual]
+            except:
+                continue # Skip rows that aren't numbers (like text or empty rows)
 
-                        if base_num not in cmm_results:
-                            cmm_results[base_num] = {'master': None, 'samples': []}
+        # 4. SHOW RESULTS
+        if len(oot_results) > 1:
+            st.success("🔥 Discrepancies Found!")
+            final_df = pd.DataFrame(oot_results)
+            st.dataframe(final_df)
 
-                        if raw_text == base_num or raw_text == f"{base_num}.0":
-                            cmm_results[base_num]['master'] = val
-                        else:
-                            cmm_results[base_num]['samples'].append(val)
+            # Excel Download
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                final_df.to_excel(writer, index=False)
+            output.seek(0)
+            
+            st.download_button("📥 Download OOT Excel", output, "OOT_Report.xlsx")
+        else:
+            st.warning("No OOT values found based on the math.")
 
-                    # --- FILL TEMPLATE ---
-                    wb = load_workbook(uploaded_template)
-                    ws = wb.active
-                    
-                    id_col_idx, res_col_idx, start_row = None, None, None
-                    for r in range(1, 30):
-                        for c in range(1, ws.max_column + 1):
-                            cell_val = str(ws.cell(row=r, column=c).value)
-                            if "5. Char No." in cell_val: id_col_idx, start_row = c, r
-                            if "9. Results" in cell_val: res_col_idx = c
-
-                    for r in range(start_row + 1, ws.max_row + 1):
-                        ir_id = extract_base_number(ws.cell(row=r, column=id_col_idx).value)
-                        if ir_id in cmm_results:
-                            data = cmm_results[ir_id]
-                            if data['master'] is not None:
-                                final_output = format_val(data['master'])
-                            elif data['samples']:
-                                vals = data['samples']
-                                final_output = f"{format_val(min(vals))} - {format_val(max(vals))}" if len(vals) > 1 and min(vals) != max(vals) else format_val(vals[0])
-                            else: continue
-                            ws.cell(row=r, column=res_col_idx).value = final_output
-
-                    # SAVE TO MEMORY FOR DOWNLOAD
-                    output = io.BytesIO()
-                    wb.save(output)
-                    output.seek(0)
-                    
-                    st.success("✅ Report Generated Successfully!")
-                    st.download_button(
-                        label="📥 Download Final IR Report",
-                        data=output,
-                        file_name="Final_Report_Done.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
+    except Exception as e:
+        st.error(f"Something went wrong: {e}")
