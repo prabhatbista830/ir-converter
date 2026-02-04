@@ -4,13 +4,20 @@ from openpyxl import load_workbook
 import re
 import io
 
-# --- UNIVERSAL SETTINGS ---
 st.set_page_config(page_title="CMM Quality Suite", layout="wide")
 
 # --- HELPER FUNCTIONS ---
-def extract_base_number(text):
+def get_clean_id(text):
+    """Removes MAX/MIN/XYZ but keeps decimals like 30.1"""
     if pd.isna(text): return None
-    match = re.search(r'(\d+)', str(text))
+    s = str(text).strip().upper()
+    # Remove text suffixes like MAX, MIN, etc.
+    s = re.sub(r'(MAX|MIN|MIN-MAX|\^MIN|\^MAX|POS|NEG).*', '', s).strip()
+    return s
+
+def extract_numbers_only(text):
+    if pd.isna(text): return None
+    match = re.search(r'(\d+(\.\d+)?)', str(text))
     return match.group(1) if match else None
 
 def is_coordinate(char_name):
@@ -25,105 +32,90 @@ page = st.sidebar.radio("Navigation Menu", ["🏠 Home", "📝 IR Converter", "�
 # --- PAGE 1: HOME ---
 if page == "🏠 Home":
     st.title("🏠 CMM Quality Suite")
-    st.write("Welcome! This tool handles your quality reporting automation.")
-    st.info("Select a tool from the sidebar to begin.")
+    st.info("Select 'IR Converter' to fill templates or 'Discrepancy Feature' for failure reports.")
 
 # --- PAGE 2: IR CONVERTER ---
 elif page == "📝 IR Converter":
     st.title("📝 IR Template Automator")
-    uploaded_cmm = st.file_uploader("Upload CMM Result (Excel)", type=["xlsx"], key="ir_cmm")
-    uploaded_template = st.file_uploader("Upload IR Template (Excel)", type=["xlsx"], key="ir_tmp")
+    uploaded_cmm = st.file_uploader("Upload CMM Result (Excel)", type=["xlsx"], key="ir1")
+    uploaded_template = st.file_uploader("Upload IR Template (Excel)", type=["xlsx"], key="ir2")
 
     if uploaded_cmm and uploaded_template:
         if st.button("🚀 Process IR Report"):
             try:
+                # 1. Load CMM Data
                 df_scan = pd.read_excel(uploaded_cmm, header=None, nrows=30)
-                header_idx = next((i for i, row in df_scan.iterrows() if "CHARACTERISTIC" in row.astype(str).str.upper().values), 12)
-                df_cmm = pd.read_excel(uploaded_cmm, header=header_idx)
+                h_idx = next((i for i, row in df_scan.iterrows() if "CHARACTERISTIC" in row.astype(str).str.upper().values), 12)
+                df_cmm = pd.read_excel(uploaded_cmm, header=h_idx)
                 df_cmm.columns = [str(c).strip().upper() for c in df_cmm.columns]
 
-                df_cmm['BASE_CHAR'] = df_cmm['CHARACTERISTIC'].apply(lambda x: None if is_coordinate(x) else extract_base_number(x))
-                cmm_clean = df_cmm.dropna(subset=['BASE_CHAR']).copy()
-                cmm_final = cmm_clean.groupby('BASE_CHAR')['ACTUAL'].agg(['min', 'max']).reset_index()
+                # Group by exact ID (keeps 30.1 as 30.1)
+                df_cmm['MATCH_ID'] = df_cmm['CHARACTERISTIC'].apply(lambda x: get_clean_id(x) if not is_coordinate(x) else None)
+                cmm_clean = df_cmm.dropna(subset=['MATCH_ID']).copy()
+                cmm_clean['ACTUAL'] = pd.to_numeric(cmm_clean['ACTUAL'], errors='coerce')
+                cmm_final = cmm_clean.groupby('MATCH_ID')['ACTUAL'].agg(['min', 'max']).reset_index()
 
-                template_bytes = uploaded_template.getvalue()
-                book = load_workbook(io.BytesIO(template_bytes))
+                # 2. Fill Template
+                book = load_workbook(io.BytesIO(uploaded_template.getvalue()))
                 sheet = book.active
 
-                count = 0
+                success_count = 0
                 for row_idx in range(1, sheet.max_row + 1):
                     cell_val = sheet.cell(row=row_idx, column=1).value
-                    base_num = extract_base_number(cell_val)
-                    if base_num:
-                        match = cmm_final[cmm_final['BASE_CHAR'] == base_num]
+                    template_id = get_clean_id(cell_val)
+                    
+                    if template_id:
+                        match = cmm_final[cmm_final['MATCH_ID'] == template_id]
                         if not match.empty:
                             v_min, v_max = match.iloc[0]['min'], match.iloc[0]['max']
-                            output_str = f"{v_min:.4f} / {v_max:.4f}" if v_min != v_max else f"{v_min:.4f}"
-                            sheet.cell(row=row_idx, column=3).value = output_str
-                            count += 1
+                            final_str = f"{v_min:.4f} / {v_max:.4f}" if v_min != v_max else f"{v_min:.4f}"
+                            sheet.cell(row=row_idx, column=3).value = final_str
+                            success_count += 1
 
                 out_ir = io.BytesIO()
                 book.save(out_ir)
-                st.success(f"✅ Matched {count} characteristics!")
-                st.download_button("📥 Download Filled IR", out_ir.getvalue(), "Filled_IR_Report.xlsx")
+                st.success(f"✅ Matched {success_count} characteristics!")
+                st.download_button("📥 Download Filled IR", out_ir.getvalue(), "Filled_IR.xlsx")
             except Exception as e:
                 st.error(f"Error: {e}")
 
 # --- PAGE 3: DISCREPANCY FEATURE ---
 elif page == "⚠️ Discrepancy Feature":
     st.title("⚠️ Out-of-Tolerance Reporter")
-    uploaded_oot = st.file_uploader("Upload CMM Result", type=["xlsx"], key="oot_cmm")
+    uploaded_oot = st.file_uploader("Upload CMM Result", type=["xlsx"], key="oot1")
 
     if uploaded_oot:
         if st.button("🔍 Generate Discrepancy Report"):
             try:
-                # 1. SN from F8
+                # SN from F8
                 df_sn = pd.read_excel(uploaded_oot, header=None, nrows=10, usecols="F")
                 sn_val = df_sn.iloc[7, 0]
                 
-                # 2. Find Header
                 df_scan = pd.read_excel(uploaded_oot, header=None, nrows=30)
                 h_idx = next((i for i, row in df_scan.iterrows() if "CHARACTERISTIC" in row.astype(str).str.upper().values), 12)
-                
-                # Load full data
                 df_data = pd.read_excel(uploaded_oot, header=h_idx)
                 df_data.columns = [str(c).strip().upper() for c in df_data.columns]
 
                 oot_results = {"SN": [sn_val]}
-                
                 for _, row in df_data.iterrows():
                     char_name = str(row.get("CHARACTERISTIC", "")).strip()
-                    if char_name == "" or char_name.lower() == "nan" or is_coordinate(char_name):
+                    if is_coordinate(char_name) or char_name.lower() == "nan" or char_name == "":
                         continue
-                    
                     try:
-                        act = float(row.get("ACTUAL", 0))
-                        nom = float(row.get("NOMINAL", 0))
-                        u_tol = float(row.get("UPPER TOL", 0))
-                        l_tol = float(row.get("LOWER TOL", 0))
-
-                        # OOT Math Check
+                        act, nom = float(row['ACTUAL']), float(row['NOMINAL'])
+                        u_tol, l_tol = float(row['UPPER TOL']), float(row['LOWER TOL'])
                         if act > (nom + u_tol) or act < (nom + l_tol):
-                            # --- IMPROVED HEADER LOGIC ---
-                            if l_tol == 0:
-                                tol_str = f"+ {abs(u_tol)}"
-                            elif u_tol == 0:
-                                tol_str = f"- {abs(l_tol)}"
-                            else:
-                                tol_str = f"+/- {abs(u_tol)}"
-                            
-                            col_header = f"Dim#{char_name} ({nom} {tol_str})"
-                            oot_results[col_header] = [f"{act:.4f}"]
-                    except:
-                        continue
+                            if l_tol == 0: t_str = f"+ {abs(u_tol)}"
+                            elif u_tol == 0: t_str = f"- {abs(l_tol)}"
+                            else: t_str = f"+/- {abs(u_tol)}"
+                            oot_results[f"Dim#{char_name} ({nom} {t_str})"] = [f"{act:.4f}"]
+                    except: continue
 
                 if len(oot_results) > 1:
-                    oot_df = pd.DataFrame(oot_results)
-                    st.write("### Failure Summary:")
-                    st.dataframe(oot_df)
+                    st.dataframe(pd.DataFrame(oot_results))
                     out_oot = io.BytesIO()
                     with pd.ExcelWriter(out_oot, engine='xlsxwriter') as writer:
-                        oot_df.to_excel(writer, index=False)
+                        pd.DataFrame(oot_results).to_excel(writer, index=False)
                     st.download_button("📥 Download Discrepancy Excel", out_oot.getvalue(), "Discrepancy_Report.xlsx")
                 else:
                     st.success("✅ No discrepancies found!")
