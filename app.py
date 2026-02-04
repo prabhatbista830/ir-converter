@@ -15,6 +15,7 @@ def extract_base_number(text):
 
 def is_coordinate(char_name):
     name = str(char_name).strip().upper()
+    # Guarding against X, Y, Z suffixes and standalone letters
     suffixes = ('.X', '.Y', '.Z', '.A', '.B', '.C', ' X', ' Y', ' Z')
     standalones = ['X', 'Y', 'Z', 'A', 'B', 'C']
     return name.endswith(suffixes) or name in standalones
@@ -46,18 +47,15 @@ elif page == "📝 IR Converter":
     if uploaded_cmm and uploaded_template:
         if st.button("🚀 Process IR Report"):
             try:
-                # Load CMM Data
                 df_scan = pd.read_excel(uploaded_cmm, header=None, nrows=25)
                 header_idx = next((i for i, row in df_scan.iterrows() if "CHARACTERISTIC" in row.astype(str).str.upper().values), 12)
                 df_cmm = pd.read_excel(uploaded_cmm, header=header_idx)
                 df_cmm.columns = [str(c).strip().upper() for c in df_cmm.columns]
 
-                # Filter Coordinates
                 df_cmm['BASE_CHAR'] = df_cmm['CHARACTERISTIC'].apply(lambda x: None if is_coordinate(x) else extract_base_number(x))
                 cmm_clean = df_cmm.dropna(subset=['BASE_CHAR']).copy()
                 cmm_final = cmm_clean.groupby('BASE_CHAR')['ACTUAL'].agg(['min', 'max']).reset_index()
 
-                # Write to Template
                 template_bytes = uploaded_template.getvalue()
                 book = load_workbook(io.BytesIO(template_bytes))
                 sheet = book.active
@@ -76,7 +74,6 @@ elif page == "📝 IR Converter":
                             sheet.cell(row=row_idx, column=3).value = output_str
                             count += 1
 
-                # Download
                 out_ir = io.BytesIO()
                 book.save(out_ir)
                 st.success(f"✅ Matched {count} characteristics!")
@@ -98,8 +95,8 @@ elif page == "⚠️ Discrepancy Feature":
                 df_sn = pd.read_excel(uploaded_oot, header=None, nrows=10, usecols="F")
                 sn_val = df_sn.iloc[7, 0]
                 
-                # 2. Process Data
-                df_scan = pd.read_excel(uploaded_oot, header=None, nrows=25)
+                # 2. Process Data - Reading up to 5000 rows to ensure we don't miss the end (174)
+                df_scan = pd.read_excel(uploaded_oot, header=None, nrows=30)
                 h_idx = next((i for i, row in df_scan.iterrows() if "CHARACTERISTIC" in row.astype(str).str.upper().values), 12)
                 df_data = pd.read_excel(uploaded_oot, header=h_idx)
                 df_data.columns = [str(c).strip().upper() for c in df_data.columns]
@@ -107,16 +104,21 @@ elif page == "⚠️ Discrepancy Feature":
                 oot_results = {"SN": [sn_val]}
                 
                 for _, row in df_data.iterrows():
-                    char_name = str(row.get("CHARACTERISTIC", ""))
-                    if is_coordinate(char_name) or char_name == "nan":
+                    # Get character name and clean it
+                    char_name = str(row.get("CHARACTERISTIC", "")).strip()
+                    
+                    # Skip if empty or coordinate
+                    if char_name == "" or char_name.lower() == "nan" or is_coordinate(char_name):
                         continue
                     
                     try:
+                        # Convert to float for math
                         act = float(row.get("ACTUAL", 0))
                         nom = float(row.get("NOMINAL", 0))
                         u_tol = float(row.get("UPPER TOL", 0))
                         l_tol = float(row.get("LOWER TOL", 0))
 
+                        # OOT Math Check
                         if act > (nom + u_tol) or act < (nom + l_tol):
                             col_header = f"Dim#{char_name} ({nom} +/- {abs(u_tol)})"
                             oot_results[col_header] = [f"{act:.4f}"]
