@@ -31,7 +31,7 @@ page = st.sidebar.radio("Navigation Menu", ["🏠 Home", "📝 IR Converter", "�
 if page == "🏠 Home":
     st.title("📊 CMM Quality Suite")
     st.write("Welcome! Use the sidebar to switch between tools.")
-    st.info("The IR Converter uses your verified logic. The Discrepancy Report handles multi-file batching with absolute decimal output.")
+    st.info("IR Converter: Verified logic. Discrepancy Report: Multi-file batching with 4-decimal positive numbers.")
 
 # --- PAGE 2: IR CONVERTER (STABLE VERSION) ---
 elif page == "📝 IR Converter":
@@ -86,12 +86,12 @@ elif page == "📝 IR Converter":
                         st.download_button("📥 Download Final IR", output.getvalue(), "Final_Report_Done.xlsx")
             except Exception as e: st.error(f"Error: {e}")
 
-# --- PAGE 3: DISCREPANCY REPORT (POSITIVE NUMBERS & BLANKS) ---
+# --- PAGE 3: DISCREPANCY REPORT (4 DECIMALS & BLANKS) ---
 elif page == "⚠️ Discrepancy Report":
     st.title("⚠️ Batch Out-of-Tolerance Reporter")
-    st.write("Upload multiple CMM files. Failures show as positive numbers (preserving decimals); passes remain blank.")
+    st.write("Upload multiple CMM files. Failures show as positive numbers with 4 decimals; passes remain blank.")
     
-    uploaded_files = st.file_uploader("Upload CMM Results", type=["xlsx"], accept_multiple_files=True, key="oot_batch")
+    uploaded_files = st.file_uploader("Upload CMM Results (Multi-select)", type=["xlsx"], accept_multiple_files=True, key="oot_batch")
 
     if uploaded_files:
         if st.button("🔍 Generate Combined Discrepancy Report"):
@@ -125,9 +125,8 @@ elif page == "⚠️ Discrepancy Report":
                                 else: t_str = f"+/- {abs(u_tol)}"
                                 
                                 col_header = f"Dim#{name} ({nom} {t_str})"
-                                # Strip negative sign but keep decimals
-                                val_to_show = abs(act)
-                                part_row[col_header] = val_to_show
+                                # Force positive and exactly 4 decimals
+                                part_row[col_header] = f"{abs(act):.4f}"
                         except: continue
                     
                     all_part_data.append(part_row)
@@ -144,6 +143,6 @@ elif page == "⚠️ Discrepancy Report":
                         final_oot_df.to_excel(writer, index=False)
                     st.download_button("📥 Download Combined Discrepancies", out_oot.getvalue(), "Combined_Discrepancy_Report.xlsx")
                 else:
-                    st.success("✅ No discrepancies found across any parts!")
+                    st.success("✅ No discrepancies found!")
             except Exception as e:
                 st.error(f"Error processing files: {e}")
