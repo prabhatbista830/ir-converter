@@ -31,7 +31,7 @@ page = st.sidebar.radio("Navigation Menu", ["🏠 Home", "📝 IR Converter", "�
 if page == "🏠 Home":
     st.title("📊 CMM Quality Suite")
     st.write("Welcome! Use the sidebar to switch between tools.")
-    st.info("The IR Converter uses your verified logic. The Discrepancy Report now supports multi-file batching.")
+    st.info("The IR Converter uses your verified logic. The Discrepancy Report handles multi-file batching with positive integer output.")
 
 # --- PAGE 2: IR CONVERTER (STABLE VERSION) ---
 elif page == "📝 IR Converter":
@@ -86,16 +86,16 @@ elif page == "📝 IR Converter":
                         st.download_button("📥 Download Final IR", output.getvalue(), "Final_Report_Done.xlsx")
             except Exception as e: st.error(f"Error: {e}")
 
-# --- PAGE 3: DISCREPANCY REPORT (MULTI-FILE & ABSOLUTE INTEGERS) ---
+# --- PAGE 3: DISCREPANCY REPORT (POSITIVE INTEGERS & BLANKS) ---
 elif page == "⚠️ Discrepancy Report":
     st.title("⚠️ Batch Out-of-Tolerance Reporter")
-    st.write("Upload multiple CMM files to get a combined failure report.")
+    st.write("Upload multiple CMM files. Failures will show as positive integers; passes remain blank.")
     
-    uploaded_files = st.file_uploader("Upload CMM Results (Select multiple files)", type=["xlsx"], accept_multiple_files=True, key="oot_batch")
+    uploaded_files = st.file_uploader("Upload CMM Results", type=["xlsx"], accept_multiple_files=True, key="oot_batch")
 
     if uploaded_files:
         if st.button("🔍 Generate Combined Discrepancy Report"):
-            all_part_data = [] # List to hold dictionaries for each SN
+            all_part_data = [] 
             
             try:
                 for uploaded_file in uploaded_files:
@@ -110,7 +110,6 @@ elif page == "⚠️ Discrepancy Report":
                     df_data.columns = [str(c).strip().upper() for c in df_data.columns]
 
                     part_row = {"SN": sn_val}
-                    found_failure = False
 
                     for _, row in df_data.iterrows():
                         name = str(row.get("CHARACTERISTIC", "")).strip()
@@ -120,24 +119,23 @@ elif page == "⚠️ Discrepancy Report":
                             act, nom = float(row['ACTUAL']), float(row['NOMINAL'])
                             u_tol, l_tol = float(row['UPPER TOL']), float(row['LOWER TOL'])
                             
-                            # Math check
                             if act > (nom + u_tol) or act < (nom + l_tol):
+                                # Tolerence text logic
                                 if l_tol == 0: t_str = f"+ {abs(u_tol)}"
                                 elif u_tol == 0: t_str = f"- {abs(l_tol)}"
                                 else: t_str = f"+/- {abs(u_tol)}"
                                 
                                 col_header = f"Dim#{name} ({nom} {t_str})"
-                                # Convert to absolute integer as requested (e.g., -37.001 -> 37)
-                                part_row[col_header] = int(abs(round(act)))
-                                found_failure = True
+                                # Convert to positive integer (e.g. -37.5 -> 37)
+                                val_to_show = int(abs(act))
+                                part_row[col_header] = val_to_show
                         except: continue
                     
                     all_part_data.append(part_row)
 
                 if all_part_data:
-                    # Merge all dictionaries into one DataFrame (Pandas handles blanks automatically)
                     final_oot_df = pd.DataFrame(all_part_data)
-                    # Fill NaN with empty string so "Pass" cells are blank
+                    # This ensures cells with no data are blank, not 0
                     final_oot_df = final_oot_df.fillna("")
                     
                     st.write("### Combined Failure Summary:")
